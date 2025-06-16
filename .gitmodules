@@ -1,0 +1,3 @@
+[submodule "save_repo"]
+	path = save_repo
+	url = https://github.com/debskipawel/split-fiction-saves
