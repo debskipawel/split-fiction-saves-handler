@@ -1,12 +1,18 @@
+# ----------- IMPORTS ----------
+
 Add-Type -AssemblyName System.Windows.Forms
+
+# ----------- GLOBALS ----------
 
 $global:selected_username = $null;
 
-function ValidateJsonConfig($json_config) {
+# ----------- FUNCTIONS ----------
+
+function Validate-JsonConfig($json_config) {
     return (Get-Member -InputObject $json_config -Name "name") -AND (Get-Member -InputObject $json_config -Name "branch_name")
 }
 
-function Select-Playing-User($usernames) {
+function Select-PlayingUser($usernames) {
 
     # Create the main form
     $form = New-Object System.Windows.Forms.Form
@@ -78,7 +84,16 @@ function Select-Playing-User($usernames) {
     $form.Dispose()
 }
 
-function Copy-Current-Directory($target_directory, $allowed_extensions) {
+function Find-GamePath() {
+    $steamapps_path = Get-ChildItem C:\ -Filter "steamapps" -Recurse -Depth 4 -Force -ErrorAction SilentlyContinue |
+    Where-Object { ($_.FullName -MATCH "\\Steam\\steamapps") -AND ($_.PSIsContainer) } |
+    ForEach-Object -Process { Write-Output $_.FullName } |
+    Select-Object -First 1
+
+    return "${steamapps_path}\common\Split Fiction\Split\Binaries\Win64\SplitFiction.exe"
+}
+
+function Copy-CurrentDirectory($target_directory, $allowed_extensions) {
 
     Get-ChildItem -Recurse | 
     Where-Object { ($allowed_extensions.Count -EQ 0) -OR ($_.Extension -IN $allowed_extensions) } | 
@@ -86,65 +101,91 @@ function Copy-Current-Directory($target_directory, $allowed_extensions) {
     ForEach-Object -Process { Copy-Item -Destination (New-Item -Path (Split-Path -Path "${target_directory}\$_") -Type Directory -Force) $_ }
 }
 
-$saves_repo_url = "https://github.com/debskipawel/split-fiction-saves"
+# ----------- MAIN SCRIPT ----------
 
-# Determine who is playing
+# Load JSON config objects
+
+Write-Output "Reading available configs..."
+
 $configs = Get-ChildItem ${PSScriptRoot} -Filter "*.json" | 
-ForEach-Object -Process { Get-Content -Raw $_.PSChildName | ConvertFrom-Json } | 
-Where-Object { ValidateJsonConfig($_) };
+ForEach-Object -Process { Get-Content -Raw $_.FullName | ConvertFrom-Json } | 
+Where-Object { Validate-JsonConfig $_ }
 
 if ($configs.Count -EQ 0) {
     [System.Windows.Forms.MessageBox]::Show("No configs found.", "Warning", "OK", "Warning")
-    exit;
+    exit
 }
 
 $configs_names = $configs | ForEach-Object -Process { $_.name }
 
-Select-Playing-User $configs_names
+# Determining which config should be used
+Write-Output "Select a player."
 
-$selected_config = $configs | Where-Object { $_.name -EQ $global:selected_username } | Select-Object -Index 0;
+Select-PlayingUser $configs_names | Out-Null
 
-$player_name = $selected_config.name
+$selected_config = $configs | Where-Object { $_.name -EQ $global:selected_username } | Select-Object -Index 0
+
+if ($null -EQ $selected_config) {
+    Write-Output "No player selected, aborting."
+    exit
+}
+
 $player_branch_name = $selected_config.branch_name
 
 $game_saves_path = "$env:LOCALAPPDATA\SplitFiction";
-$repo_saves_path = "$PSScriptRoot\save_repo\Saves\SplitFiction";
+$submodule_path = "$PSScriptRoot\save_repo"
+$submodule_saves_path = "$submodule_path\Saves\SplitFiction";
 
-# Clone the repo if doesn't exist
+# Make sure that the saves submodule is initialized
+
+Push-Location $PSScriptRoot | Out-Null
+
+Write-Output "Initializing saves submodule..."
 git submodule update --init
 
-# Pull the saves from repo
-Push-Location "$repo_saves_path\..\..";
+Pop-Location | Out-Null
 
-git checkout ${player_branch_name}
+# Pull the saves from submodule
+Push-Location $submodule_path | Out-Null
+
+git checkout $player_branch_name
 git fetch
 git pull
-git status
 
-Pop-Location;
-
-$save_file_extensions = @(".Split", ".split", ".ini")
+Pop-Location | Out-Null
 
 # Copy cloud saves to the game directory
-Push-Location $repo_saves_path
-Copy-Current-Directory $game_saves_path $save_file_extensions
-Pop-Location
+$save_file_extensions = @(".Split", ".split", ".ini")
 
-# Launch the game
-Start-Process "C:\Program Files (x86)\Steam\steamapps\common\Split Fiction\Split\Binaries\Win64\SplitFiction.exe" -Wait;
+Write-Output "Copying saves from repo to the game directory"
+
+Push-Location $submodule_saves_path | Out-Null
+Copy-CurrentDirectory $game_saves_path $save_file_extensions
+Pop-Location | Out-Null
+
+# Find the game path
+$game_path = Find-GamePath
+
+Start-Process $game_path -Wait
 
 # After stopping the game, copy the new save files back to repo directory
-Push-Location $game_saves_path
-Copy-Current-Directory $repo_saves_path $save_file_extensions
-Pop-Location
+
+Write-Output "Copying saves from game directory to the repo."
+
+Push-Location $game_saves_path | Out-Null
+Copy-CurrentDirectory $submodule_saves_path $save_file_extensions
+Pop-Location | Out-Null
 
 # Commit the saves
-Push-Location $repo_saves_path
+
+Write-Output "Commiting new saves."
+
+Push-Location $submodule_path | Out-Null
 
 $commit_msg = Get-Date -Format "dd/MM/yyyy, HH:mm:ss";
-Write-Output ${commit_msg};
+
 git add .
 git commit -m ${commit_msg}
-#git push
+git push
 
-Pop-Location;
+Pop-Location | Out-Null
