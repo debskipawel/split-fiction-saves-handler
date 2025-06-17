@@ -85,12 +85,26 @@ function Select-PlayingUser($usernames) {
 }
 
 function Find-GamePath() {
-    $steamapps_path = Get-ChildItem C:\ -Filter "steamapps" -Recurse -Depth 4 -Force -ErrorAction SilentlyContinue |
-    Where-Object { ($_.FullName -MATCH "\\Steam\\steamapps") -AND ($_.PSIsContainer) } |
-    ForEach-Object -Process { Write-Output $_.FullName } |
-    Select-Object -First 1
 
-    return "${steamapps_path}\common\Split Fiction\Split\Binaries\Win64\SplitFiction.exe"
+    $drives = Get-PSDrive -PSProvider FileSystem | ForEach-Object -Process { $_.Root }
+
+    foreach ($drive in $drives) {
+        $potential_steamapps_paths = Get-ChildItem $drive -Filter "steamapps" -Recurse -Depth 4 -Force -ErrorAction SilentlyContinue |
+        Where-Object { ($_.FullName -MATCH "\\Steam\\steamapps") -AND ($_.PSIsContainer) } |
+        ForEach-Object -Process { Write-Output $_.FullName }
+
+        if ($potential_steamapps_paths.Count -GT 0) {
+            $steamapps_path = $potential_steamapps_paths | Select-Object -First 1
+
+            $game_path = "${steamapps_path}\common\Split Fiction\Split\Binaries\Win64\SplitFiction.exe"
+
+            if (Test-Path $game_path) {
+                return $game_path;
+            }
+        }
+    }
+
+    return $null
 }
 
 function Copy-CurrentDirectory($target_directory, $allowed_extensions) {
@@ -104,6 +118,16 @@ function Copy-CurrentDirectory($target_directory, $allowed_extensions) {
 # ----------- MAIN SCRIPT ----------
 
 # Load JSON config objects
+
+# Find the game path
+Write-Output "Trying to find the game"
+
+$game_path = Find-GamePath
+
+if ($null -EQ $game_path) {
+    Write-Output "Failed to locate the game executable..."
+    exit
+}
 
 Write-Output "Reading available configs..."
 
@@ -163,8 +187,8 @@ Push-Location $submodule_saves_path | Out-Null
 Copy-CurrentDirectory $game_saves_path $save_file_extensions
 Pop-Location | Out-Null
 
-# Find the game path
-$game_path = Find-GamePath
+# Start the game
+Write-Output "Launching the game..."
 
 Start-Process $game_path -Wait
 
